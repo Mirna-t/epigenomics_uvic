@@ -1,2 +1,190 @@
 # Folder to store results
 # from ATAC-seq hands-on session
+
+
+# ============================================================
+# ATAC-seq practical - Commands
+# Run all commands from the repository root: epigenomics_uvic
+# ============================================================
+
+cd /Users/mirna/Desktop/Mirna/MasteOmicsDataAnalysis_Study/Epigenomics/epigenomics_uvic
+
+# ------------------------------------------------------------
+# Section 4 - Retrieve ATAC-seq peaks
+# ------------------------------------------------------------
+
+# Prepare the folders
+mkdir -p ATAC-seq/data/bigBed.files
+mkdir -p ATAC-seq/analyses/peaks
+mkdir -p ATAC-seq/tmp
+mkdir -p ATAC-seq/annotation
+
+# Select ATAC-seq peak files for stomach and sigmoid colon
+grep -E 'ATAC-seq' metadata.tsv | \
+grep -E 'stomach|sigmoid_colon' | \
+grep -F bigBed | \
+grep -F GRCh38 | \
+grep -F pseudoreplicated_peaks | \
+cut -f1,7,11
+
+# Save file accessions
+grep -E 'ATAC-seq' metadata.tsv | \
+grep -E 'stomach|sigmoid_colon' | \
+grep -F bigBed | \
+grep -F GRCh38 | \
+grep -F pseudoreplicated_peaks | \
+cut -f1 > ATAC-seq/analyses/peaks/atac.ids.txt
+
+# Download ATAC-seq bigBed files
+cat ATAC-seq/analyses/peaks/atac.ids.txt | while read filename; do
+  wget -P ATAC-seq/data/bigBed.files \
+  "https://www.encodeproject.org/files/$filename/@@download/$filename.bigBed"
+done
+
+#
+at data/bigBed.files/md5sum.txt | while read filename original_md5; do
+  md5sum data/bigBed.files/$filename.bigBed | \
+  awk -v f="$filename" -v o="$original_md5" \
+  '{print f, o, $1}'
+done > tmp
+
+mv ATAC-seq/tmp/md5_check.txt ATAC-seq/data/bigBed.files/md5sum.txt
+
+# Check mismatches
+awk '$2!=$3' ATAC-seq/data/bigBed.files/md5sum.txt
+
+# Convert bigBed files to BED
+bigBedToBed ATAC-seq/data/bigBed.files/ENCFF762IFP.bigBed ATAC-seq/tmp/stomach.peaks.bed
+bigBedToBed ATAC-seq/data/bigBed.files/ENCFF287UHP.bigBed ATAC-seq/tmp/sigmoid_colon.peaks.bed
+
+# Copy gene body annotation from ChIP-seq practical
+cp ChIP-seq/annotation/gencode.v24.protein.coding.gene.body.bed ATAC-seq/annotation/
+
+# Count ATAC-seq peaks outside protein-coding gene bodies
+bedtools intersect -v \
+-a ATAC-seq/tmp/stomach.peaks.bed \
+-b ATAC-seq/annotation/gencode.v24.protein.coding.gene.body.bed | wc -l
+
+bedtools intersect -v \
+-a ATAC-seq/tmp/sigmoid_colon.peaks.bed \
+-b ATAC-seq/annotation/gencode.v24.protein.coding.gene.body.bed | wc -l
+
+
+# ------------------------------------------------------------
+# Section 5 - Candidate distal regulatory elements
+# ------------------------------------------------------------
+
+mkdir -p regulatory_elements/{atac,histone,tmp,results}
+
+# Save ATAC peaks outside gene bodies
+bedtools intersect -v \
+-a ATAC-seq/tmp/stomach.peaks.bed \
+-b ATAC-seq/annotation/gencode.v24.protein.coding.gene.body.bed \
+> regulatory_elements/atac/stomach.distal.open.bed
+
+bedtools intersect -v \
+-a ATAC-seq/tmp/sigmoid_colon.peaks.bed \
+-b ATAC-seq/annotation/gencode.v24.protein.coding.gene.body.bed \
+> regulatory_elements/atac/sigmoid_colon.distal.open.bed
+
+wc -l regulatory_elements/atac/*.bed
+
+# Download histone mark peak files
+wget -P ChIP-seq/data/bigBed.files "https://www.encodeproject.org/files/ENCFF844XRN/@@download/ENCFF844XRN.bigBed"
+wget -P ChIP-seq/data/bigBed.files "https://www.encodeproject.org/files/ENCFF977LBD/@@download/ENCFF977LBD.bigBed"
+wget -P ChIP-seq/data/bigBed.files "https://www.encodeproject.org/files/ENCFF872UHN/@@download/ENCFF872UHN.bigBed"
+wget -P ChIP-seq/data/bigBed.files "https://www.encodeproject.org/files/ENCFF487CDU/@@download/ENCFF487CDU.bigBed"
+
+# Convert histone bigBed files to BED
+bigBedToBed ChIP-seq/data/bigBed.files/ENCFF844XRN.bigBed regulatory_elements/histone/stomach.mark1.bed
+bigBedToBed ChIP-seq/data/bigBed.files/ENCFF977LBD.bigBed regulatory_elements/histone/stomach.mark2.bed
+bigBedToBed ChIP-seq/data/bigBed.files/ENCFF872UHN.bigBed regulatory_elements/histone/sigmoid_colon.mark1.bed
+bigBedToBed ChIP-seq/data/bigBed.files/ENCFF487CDU.bigBed regulatory_elements/histone/sigmoid_colon.mark2.bed
+
+# Candidate distal regulatory elements:
+# distal ATAC peaks overlapping both histone marks
+bedtools intersect -u \
+-a regulatory_elements/atac/stomach.distal.open.bed \
+-b regulatory_elements/histone/stomach.mark1.bed | \
+bedtools intersect -u \
+-a - \
+-b regulatory_elements/histone/stomach.mark2.bed \
+> regulatory_elements/results/stomach.candidate.distal.regulatory_elements.bed
+
+bedtools intersect -u \
+-a regulatory_elements/atac/sigmoid_colon.distal.open.bed \
+-b regulatory_elements/histone/sigmoid_colon.mark1.bed | \
+bedtools intersect -u \
+-a - \
+-b regulatory_elements/histone/sigmoid_colon.mark2.bed \
+> regulatory_elements/results/sigmoid_colon.candidate.distal.regulatory_elements.bed
+
+wc -l regulatory_elements/results/*.bed
+
+
+
+# ------------------------------------------------------------
+# Section 5 - Distance to closest gene on chr1
+# ------------------------------------------------------------
+
+# Regulatory element starts on chr1
+cat regulatory_elements/results/stomach.candidate.distal.regulatory_elements.bed \
+    regulatory_elements/results/sigmoid_colon.candidate.distal.regulatory_elements.bed | \
+awk 'BEGIN{FS=OFS="\t"} $1=="chr1" {print $4, $2}' \
+> regulatory_elements/regulatory.elements.starts.tsv
+
+wc -l regulatory_elements/regulatory.elements.starts.tsv
+
+# Protein-coding gene starts on chr1
+awk 'BEGIN{FS=OFS="\t"} 
+$1=="chr1" {
+  if ($6=="+") {start=$2} 
+  else {start=$3}
+  print $4, start
+}' ChIP-seq/annotation/gencode.v24.protein.coding.gene.body.bed \
+> regulatory_elements/gene.starts.tsv
+
+wc -l regulatory_elements/gene.starts.tsv
+
+# Test get.distance.py
+chmod +x bin/get.distance.py
+
+python bin/get.distance.py \
+--input regulatory_elements/gene.starts.tsv \
+--start 980000
+
+# Compute closest gene for each regulatory element
+cat regulatory_elements/regulatory.elements.starts.tsv | while read element start; do
+  python bin/get.distance.py \
+  --input regulatory_elements/gene.starts.tsv \
+  --start "$start" | \
+  awk -v element="$element" 'BEGIN{FS=OFS="\t"} {print element, $0}'
+done > regulatory_elements/regulatoryElements.genes.distances.tsv
+
+head regulatory_elements/regulatoryElements.genes.distances.tsv
+wc -l regulatory_elements/regulatoryElements.genes.distances.tsv
+
+
+# ------------------------------------------------------------
+# Section 5 - mean & median of the distances using R
+# ------------------------------------------------------------
+
+Rscript -e '
+data <- read.table("regulatory_elements/regulatoryElements.genes.distances.tsv", header=FALSE)
+data <- data[!is.na(data[,4]), ]
+distances <- data[,4]
+cat("Mean distance:", mean(distances), "bp\n")
+cat("Median distance:", median(distances), "bp\n")
+'
+
+
+# ------------------------------------------------------------
+# Section 5 - Results & Summary
+# ------------------------------------------------------------
+
+# 8,022 candidate have been identified as distal regulatory elements in stomach and 14,188 in sigmoid colon. 
+
+# On chr1, 2,477 candidate regulatory elements were assigned to their closest protein-coding gene. T
+
+# The mean distance to the closest gene was 59,740.64 bp and the median distance was 31,167.5 bp. 
+# The mean is higher than the median, suggesting a right-skewed distribution where some regulatory elements are located far from their nearest gene.
