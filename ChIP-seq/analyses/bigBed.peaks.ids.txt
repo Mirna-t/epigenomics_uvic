@@ -1,0 +1,2 @@
+ENCFF668DFB	sigmoid_colon	H3K4me3-human
+ENCFF502IJF	stomach	H3K4me3-human
